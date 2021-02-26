@@ -1,0 +1,6 @@
+testdata/files/*
+----
+testdata/files/aaa
+testdata/files/aab
+testdata/files/aac
+

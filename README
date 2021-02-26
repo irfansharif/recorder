@@ -1,0 +1,109 @@
+RECORDER
+===
+
+Recorder can be used to record a set of operations (defined only by a "command"
+and an "output"). These recordings can then be played back, which provides a
+handy way to mock out the components being recorded. For an example of this
+pattern, see github.com/cockroachdb/dev.
+
+Users will typically want to embed a recorder into a component that oversees
+any sort of side-effect or I/O they'd like to capture and then later playback
+from (instead of "doing the real thing" in tests).
+
+These side-effects could be pretty much anything. Say we're building a CLI that
+calls into the filesystem to filter for a set of directories, and writes out a
+zip file. The "I/O" here would be the globbing for files, and side-effects
+would include creating the zip file.
+
+This "I/O" could also just be calling into anything that sits outside some
+module boundary. The recorder, if embedded into the module, would let us:
+
+(a) Record the set of outbound calls, and the relevant responses, while
+    "doing the real thing".
+(b) Play back from an earlier recording, intercepting all outbound calls and
+    effectively mocking out all dependencies the component has.
+
+Let us try and mock out the globber component from earlier. Broadly what it
+could look like is:
+
+     type globber struct {
+         *recorder.Recorder
+     }
+
+     func (g *globber) glob(pattern string) (matches []string) {
+         if g.Recorder == nil || g.Recording() {
+             // Do the real thing.
+             matches, _ = filepath.Glob(pattern)
+         }
+
+         if g.Recording() {
+             g.record(pattern, matches)
+             return matches
+         }
+
+         return g.replay(pattern)
+     }
+
+We'll want to define tiny "parsers" to convert our module-specific input/output
+to the string representation recorder understand.
+
+     func (g *globber) record(pattern string, matches []string) {
+         op := recorder.Operation{
+             Command: pattern,
+             Output:  fmt.Sprintf("%s\n", strings.Join(matches, "\n")),
+         }
+         g.Record(op)
+     }
+
+     func (g *globber) replay(pattern string) (matches []string) {
+         found, _ := g.Next(func(op recorder.Operation) error {
+             if op.Command != pattern {
+             } // expected op.Command, got pattern
+             output := strings.TrimSpace(op.Output)
+             matches = strings.Split(output, "\n")
+             return nil
+         })
+         if !found {
+         } // recording for pattern not found
+         return matches
+     }
+
+Strung together we could construct tests that would plumb in recorders with the
+right mode. Say if the test is run using -record, it would emit files, and
+if not, playback from recordings in previously emitted files. With our globber,
+a recording file would have the following contents:
+
+		testdata/files/*
+		----
+		testdata/files/aaa
+		testdata/files/aab
+		testdata/files/aac
+
+And when playing back from it, we wouldn't actually need to "do the real thing"
+and reach into the file-system. The results from an earlier run were already
+recorded, we can just use that instead. See example/ for this exact testing
+pattern.
+
+---
+
+The printed form of an operation (the base unit of what can be recorded) is
+defined by the following grammar. This is the grammar used when
+generating/reading from recording files.
+
+    # comment
+    <command> \
+    <command wraps over onto the next line>
+    ----
+    <output>
+
+By default <output> cannot contain blank lines. This alternative syntax allows
+for it:
+
+    <command>
+    ----
+    ----
+    <output>
+
+    <more output>
+    ----
+    ----
