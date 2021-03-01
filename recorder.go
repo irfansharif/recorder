@@ -334,3 +334,12 @@ func (r *Recorder) parseOutput() error {
 	r.op.Output = buf.String()
 	return nil
 }
+
+// TODO(irfansharif): We could introduce a `# keep` directive to pin recordings
+// on re-write. It raises a few questions around how new recordings get merged
+// with existing ones, but it could be useful. It would allow test authors to
+// trim down auto-generated mocks by hand for readability, and ensure that
+// re-writes don't simply undo the work.
+//
+// TODO(irfansharif): If we could model errors, that'd be useful. Same thing for
+// top-level test.
