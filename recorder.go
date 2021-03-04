@@ -165,6 +165,39 @@ func (r *Recorder) Record(o Operation) error {
 	return err
 }
 
+func (r *Recorder) Do(command string, f func(command string) (output string, err error)) (output string, err error) {
+	if r == nil {
+		// Do the real thing.
+		output, err = f(command)
+		return output, err
+	}
+
+	if r.Recording() {
+		output, err = f(command)
+		if err != nil {
+			return "", err
+		}
+		op := Operation{
+			Command: command,
+			Output:  output,
+		}
+		r.Record(op)
+		return
+	}
+
+	found, err := r.Next(func(op Operation) error {
+		if op.Command != command {
+			return fmt.Errorf("%s: expected %q, got %q", r.scanner.pos(), op.Command, command)
+		}
+		output = op.Output
+		return nil
+	})
+	if !found {
+		return "", fmt.Errorf("%s: recording for %q not found", r.scanner.pos(), command)
+	}
+	return output, nil
+}
+
 // Next is used to step through the next Operation found in the recording, if
 // any.
 func (r *Recorder) Next(f func(Operation) error) (found bool, err error) {
