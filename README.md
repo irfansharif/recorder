@@ -1,4 +1,4 @@
-recorder
+Recorder
 ---
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/irfansharif/recorder.svg)](https://pkg.go.dev/github.com/irfansharif/recorder)
@@ -36,7 +36,7 @@ module boundary. The recorder, if embedded into the module, let's us:
 - Play back from an earlier recording, intercepting all outbound calls and
 effectively mocking out all dependencies the component has.
 
-# Example
+### Example
 
 Let us try and mock out the globber component from earlier. Broadly what it
 could look like is:
@@ -50,6 +50,10 @@ func (g *globber) glob(pattern string) (matches []string) {
    if g.Recorder == nil || g.Recording() {
        // Do the real thing.
        matches, _ = filepath.Glob(pattern)
+   }
+
+   if g.Recorder == nil {
+       return matches
    }
 
    if g.Recording() {
@@ -125,7 +129,7 @@ recording down by hand, and make sure we don't re-record over it (by inspecting
 the diffs during review).  Recordings, like other mocks, are also expected to
 get checked in as test data fixtures.
 
-# Grammar
+## Grammar
 
 The printed form of an operation (the base unit of what can be recorded) is
 defined by the following grammar. This is what's used when generating/reading

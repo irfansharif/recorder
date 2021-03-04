@@ -42,10 +42,11 @@ import (
 // component calls into. Recorder, if embedded into the component in question,
 // lets us:
 //
-// (a) Record the set of outbound calls, and the relevant responses, while
-//     "doing the real thing".
-// (b) Play back from an earlier recording, intercepting all outbound calls and
-//     effecting mock out all dependencies the component has.
+//  (a) Record the set of outbound calls, and the relevant responses, while
+//  "doing the real thing".
+//
+//  (b) Play back from an earlier recording, intercepting all outbound calls and
+//  effecting mock out all dependencies the component has.
 //
 // Let us try and mock out a globber. Broadly what it could look like is as
 // follows:
@@ -58,6 +59,10 @@ import (
 //          if g.Recorder == nil || g.Recording() {
 //              // Do the real thing.
 //              matches, _ = filepath.Glob(pattern)
+//          }
+//
+//          if g.Recorder == nil {
+//              return matches
 //          }
 //
 //          if g.Recording() {
@@ -99,11 +104,9 @@ import (
 //
 // 		testdata/files/*
 // 		----
-// 		----
 // 		testdata/files/aaa
 // 		testdata/files/aab
 // 		testdata/files/aac
-// 		----
 // 		----
 type Recorder struct {
 	// writer is set if we're in recording mode, and is where operations are
@@ -119,16 +122,19 @@ type Recorder struct {
 
 // New constructs a Recorder, using the specified configuration option (either
 // WithReplayFrom or WithRecordingTo).
-func New(opt func(r *Recorder)) *Recorder {
+func New(opt Option) *Recorder {
 	r := &Recorder{}
 	opt(r)
 	return r
 }
 
+// Option is used to configure a new Recorder.
+type Option func(r *Recorder)
+
 // WithReplayFrom is used to configure a Recorder to play back from the given
 // io.Reader. The provided name is used only for diagnostic purposes, it's
 // typically the name of the recording file being read.
-func WithReplayFrom(r io.Reader, name string) func(*Recorder) {
+func WithReplayFrom(r io.Reader, name string) Option {
 	return func(re *Recorder) {
 		re.scanner = newScanner(r, name)
 	}
@@ -137,7 +143,7 @@ func WithReplayFrom(r io.Reader, name string) func(*Recorder) {
 // WithRecordingTo is used to configure a Recorder to record into the given
 // io.Writer. The recordings can then later be replayed from (see
 // WithReplayFrom).
-func WithRecordingTo(w io.Writer) func(*Recorder) {
+func WithRecordingTo(w io.Writer) Option {
 	return func(r *Recorder) {
 		r.writer = w
 	}

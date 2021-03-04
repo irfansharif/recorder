@@ -18,6 +18,10 @@ func (g *globber) glob(pattern string) (matches []string) {
 		matches, _ = filepath.Glob(pattern)
 	}
 
+	if g.Recorder == nil {
+		return matches
+	}
+
 	if g.Recording() {
 		g.record(pattern, matches)
 		return matches
