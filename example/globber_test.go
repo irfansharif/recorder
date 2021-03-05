@@ -12,7 +12,7 @@ import (
 
 var recordFlag = flag.Bool(
 	"record", false,
-	"ignore existing recordings and rewrite them with results from an actual execution (see -from-checkout)",
+	"ignore existing recordings and rewrite them with results from an actual execution",
 )
 
 func TestExample(t *testing.T) {
@@ -21,22 +21,27 @@ func TestExample(t *testing.T) {
 	matches, err := filepath.Glob(pattern)
 	require.Nil(t, err)
 
+	var rec *recorder.Recorder
 	if *recordFlag {
 		recording, err := os.Create(path)
 		require.Nil(t, err)
+		defer func() {
+			require.Nil(t, recording.Close())
+		}()
 
-		rec := recorder.New(recorder.WithRecordingTo(recording))
-		g := globber{rec}
-		require.Equal(t, matches, g.glob(pattern))
-		require.Nil(t, recording.Close())
-		return
+		rec = recorder.New(recorder.WithRecording(recording))
+	} else {
+		recording, err := os.Open(path)
+		require.Nil(t, err)
+		defer func() {
+			require.Nil(t, recording.Close())
+		}()
+
+		rec = recorder.New(recorder.WithReplay(recording, path))
 	}
 
-	recording, err := os.Open(path)
-	require.Nil(t, err)
-
-	rec := recorder.New(recorder.WithReplayFrom(recording, path))
 	g := globber{rec}
-	require.Equal(t, matches, g.glob(pattern))
-	require.Nil(t, recording.Close())
+	results, err := g.glob(pattern)
+	require.Nil(t, err)
+	require.Equal(t, matches, results)
 }

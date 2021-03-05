@@ -21,47 +21,26 @@ import (
 	"strings"
 )
 
-// Operation represents the base unit of what can be recorded. It consists of a
+// operation represents the base unit of what can be recorded. It consists of a
 // command and the corresponding output.
-//
-// The printed form of the command is defined by the following grammar. This
-// grammar is used when generating/reading from recording files.
-//
-//   # comment
-//   <command> \
-//   <command wraps over onto the next line>
-//   ----
-//   <output>
-//
-// By default <output> cannot contain blank lines. This alternative syntax
-// allows the use of blank lines.
-//
-//   <command>
-//   ----
-//   ----
-//   <output>
-//
-//   <more output>
-//   ----
-//   ----
-type Operation struct {
-	Command string // <command>
-	Output  string // <output>
+type operation struct {
+	command string // <command>
+	output  string // <output>
 }
 
-// String returns a printable form for the given Operation, respecting the
-// pre-defined grammar (see type-level comment for the grammar we're
+// String returns a printable form for the given operation, respecting the
+// pre-defined grammar (see the comment on Recorder for the grammar we're
 // constructing against).
-func (o *Operation) String() string {
+func (o *operation) String() string {
 	var sb strings.Builder
-	sb.WriteString(o.Command)
+	sb.WriteString(o.command)
 	sb.WriteString("\n")
 
 	sb.WriteString("----")
 	sb.WriteString("\n")
 
 	var emptyLine bool
-	lines := strings.Split(strings.TrimRight(o.Output, "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(o.output, "\n"), "\n")
 	for _, line := range lines {
 		if line == "" {
 			emptyLine = true
@@ -73,8 +52,8 @@ func (o *Operation) String() string {
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString(o.Output)
-	if o.Output != "" && !strings.HasSuffix(o.Output, "\n") {
+	sb.WriteString(o.output)
+	if o.output != "" && !strings.HasSuffix(o.output, "\n") {
 		// If the output is not \n terminated, add it.
 		sb.WriteString("\n")
 	}

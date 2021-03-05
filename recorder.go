@@ -26,88 +26,97 @@ import (
 )
 
 // Recorder can be used to record a set of operations (defined only by a
-// "command" and an "expected output"). These recordings can then be played
-// back, which provides a handy way to mock out the components being recorded.
+// "command" and an "output"; see grammar below). These recordings can
+// then be played back, which provides a handy way to mock out the components
+// being recorded.
 //
-// Users will typically want to embed a Recorder into a component that oversees
-// any sort of side-effects or I/O they'd like to record, and later playback
-// (instead of "doing the real thing" in tests).
+// Users will typically want to embed a Recorder into structs that oversee the
+// sort of side-effect or I/O they'd like to record and later playback (instead
+// of "doing the real thing" in tests). These side-effects could be pretty much
+// anything. If we're building a CLI that calls into the filesystem to filter
+// for a set of files and writes out their contents to a zip file, the "I/O"
+// would be the listing out of files, and the side-effects would include
+// writing the zip file.
 //
-// These side-effects could be pretty much anything. Say for example we're
-// building a CLI that calls into the filesystem to filter for a set of
-// directories and writes out a zip file. The "I/O" here would be the listing
-// out of directories, and the side-effects would include creating the zip file.
-//
-// This "I/O" could also be outside-of-package boundaries a stand-alone
-// component calls into. Recorder, if embedded into the component in question,
-// lets us:
-//
+// I/O could also be outside-of-package boundaries that a stand-alone component
+// calls out to. Recorders, if embedded into the component in question, lets us:
 //  (a) Record the set of outbound calls, and the relevant responses, while
 //  "doing the real thing".
-//
-//  (b) Play back from an earlier recording, intercepting all outbound calls and
+//  (b) Play back from earlier recordings, intercepting all outbound calls and
 //  effecting mock out all dependencies the component has.
 //
 // Let us try and mock out a globber. Broadly what it could look like is as
 // follows:
 //
 //      type globber struct {
-//        *recorder.Recorder
+//          *recorder.Recorder
 //      }
 //
-//      func (g *globber) glob(pattern string) (matches []string) {
-//          if g.Recorder == nil || g.Recording() {
-//              // Do the real thing.
-//              matches, _ = filepath.Glob(pattern)
-//          }
+//      // glob returns the names of all files matching the given pattern.
+//      func (g *globber) glob(pattern string) ([]string, error) {
+//          output, err := g.Next(pattern, func() (string, error) {
+//              matches, err := filepath.Glob(pattern) // do the real thing
+//              if err != nil {
+//                  return "", err
+//              }
 //
-//          if g.Recorder == nil {
-//              return matches
-//          }
-//
-//          if g.Recording() {
-//              g.record(pattern, matches)
-//              return matches
-//          }
-//
-//          return g.replay(pattern)
-//      }
-//
-// We'll have to define tiny "parsers" to go convert our input/output to the
-// simple string representation Recorders understand.
-//
-//      func (g *globber) record(pattern string, matches []string) {
-//          op := recorder.Operation{
-//              Command: pattern,
-//              Output:  fmt.Sprintf("%s\n", strings.Join(matches, "\n")),
-//          }
-//          g.Record(op)
-//      }
-//
-//      func (g *globber) replay(pattern string) (matches []string) {
-//          found, _ := g.Next(func(op recorder.Operation) error {
-//              if op.Command != pattern {
-//              } // expected op.Command, got pattern
-//              output := strings.TrimSpace(op.Output)
-//              matches = strings.Split(output, "\n")
-//              return nil
+//              output := fmt.Sprintf("%s\n", strings.Join(matches, "\n"))
+//              return output, nil
 //          })
-//          if !found {
-//          } // recording for pattern not found
-//          return matches
+//          if err != nil {
+//              return nil, err
+//          }
+//
+//          matches := strings.Split(strings.TrimSpace(output), "\n")
+//          return matches, nil
 //      }
 //
-// Strung together we could construct tests that would plumb in Recorders with
-// the right mode (say if the test is run using -record, it would emit files),
-// and then playback from recordings if asked for (reading from previously
-// emitted files). See example/ for this exact testing pattern.
+// We had to define tiny bi-directional parsers to convert our input and output
+// to the human-readable string form Recorders understand. Strung together we
+// can build tests that would plumb in Recorders with the right mode and play
+// back from them if asked for. See example/ for this test pattern, where it
+// behaves differently depending on whether or not -record is specified.
 //
+// 		$ go test -run TestExample [-record]
+//		$ cat testdata/recording
 // 		testdata/files/*
 // 		----
 // 		testdata/files/aaa
 // 		testdata/files/aab
 // 		testdata/files/aac
-// 		----
+//
+// Once the recordings are captured, they can be edited and maintained by hand.
+// An example of where we might want to do this is for recordings for commands
+// that generate copious amounts of output. It suffices for us to trim the
+// recording down by hand, and make sure we don't re-record over it (by
+// inspecting the diffs during review). Recordings, like other mocks, are also
+// expected to get checked in as test data fixtures.
+//
+// ---
+//
+// The printed form of the command is defined by the following grammar. This
+// form is used when generating/reading from recording files.
+//
+//   # comment
+//   <command> \
+//   <that wraps over onto the next line>
+//   ----
+//   <output>
+//
+// By default <output> cannot contain blank lines. This alternative syntax
+// allows the use of blank lines.
+//
+//   <command>
+//   ----
+//   ----
+//   <output>
+//
+//   <more output>
+//   ----
+//   ----
+//
+// Callers are free to use <output> to model errors as well; it's all opaque to
+// Recorders.
 type Recorder struct {
 	// writer is set if we're in recording mode, and is where operations are
 	// recorded.
@@ -117,11 +126,11 @@ type Recorder struct {
 	// replaying the recording from. op is the scratch space used to
 	// parse out the current operation being read.
 	scanner *scanner
-	op      Operation
+	op      operation
 }
 
 // New constructs a Recorder, using the specified configuration option (either
-// WithReplayFrom or WithRecordingTo).
+// WithReplay or WithRecording).
 func New(opt Option) *Recorder {
 	r := &Recorder{}
 	opt(r)
@@ -131,77 +140,89 @@ func New(opt Option) *Recorder {
 // Option is used to configure a new Recorder.
 type Option func(r *Recorder)
 
-// WithReplayFrom is used to configure a Recorder to play back from the given
+// WithReplay is used to configure a Recorder to play back from the given
 // io.Reader. The provided name is used only for diagnostic purposes, it's
 // typically the name of the recording file being read.
-func WithReplayFrom(r io.Reader, name string) Option {
+func WithReplay(from io.Reader, name string) Option {
 	return func(re *Recorder) {
-		re.scanner = newScanner(r, name)
+		re.scanner = newScanner(from, name)
 	}
 }
 
-// WithRecordingTo is used to configure a Recorder to record into the given
-// io.Writer. The recordings can then later be replayed from (see
-// WithReplayFrom).
-func WithRecordingTo(w io.Writer) Option {
+// WithRecording is used to configure a Recorder to record into the given
+// io.Writer. The recordings can then later be replayed from (see WithReplay).
+func WithRecording(to io.Writer) Option {
 	return func(r *Recorder) {
-		r.writer = w
+		r.writer = to
 	}
 }
 
-// Recording returns whether or not the recorder is configured to record (as
-// opposed to being configured to replay from an existing recording).
-func (r *Recorder) Recording() bool {
-	return r.writer != nil
-}
-
-// Record is used to record the given operation.
-func (r *Recorder) Record(o Operation) error {
-	if !r.Recording() {
-		return errors.New("misconfigured recorder; not set to record")
-	}
-
-	_, err := r.writer.Write([]byte(o.String()))
-	return err
-}
-
-func (r *Recorder) Do(command string, f func(command string) (output string, err error)) (output string, err error) {
+// Next is used to step through the next operation in the recorder. It does one
+// of three things, depending on how the recorder is configured.
+//  (a) WithReplay replays the next command in the recording, as long as it's
+//  identical to the provided one
+//  (b) WithRecording records the given command and output (captured by the
+//  provided callback)
+//  (c) If the recorder is nil (i.e. it's simply not configured), it will
+//  transparently execute the callback
+func (r *Recorder) Next(command string, f func() (output string, err error)) (string, error) {
 	if r == nil {
-		// Do the real thing.
-		output, err = f(command)
+		// Do the real thing; we're not recording or replaying.
+		output, err := f()
 		return output, err
 	}
 
-	if r.Recording() {
-		output, err = f(command)
+	if r.recording() {
+		output, err := f()
 		if err != nil {
 			return "", err
 		}
-		op := Operation{
-			Command: command,
-			Output:  output,
+
+		op := operation{command, output}
+		if err := r.record(op); err != nil {
+			return "", err
 		}
-		r.Record(op)
-		return
+		return output, nil
 	}
 
-	found, err := r.Next(func(op Operation) error {
-		if op.Command != command {
-			return fmt.Errorf("%s: expected %q, got %q", r.scanner.pos(), op.Command, command)
+	var output string
+	found, err := r.step(func(op operation) error {
+		if op.command != command {
+			return fmt.Errorf("%s: expected %q, got %q", r.scanner.pos(), op.command, command)
 		}
-		output = op.Output
+		output = op.output
 		return nil
 	})
+	if err != nil {
+		return "", err
+	}
 	if !found {
 		return "", fmt.Errorf("%s: recording for %q not found", r.scanner.pos(), command)
 	}
+
 	return output, nil
 }
 
-// Next is used to step through the next Operation found in the recording, if
+// recording returns whether or not the recorder is configured to record (as
+// opposed to being configured to replay from an existing recording).
+func (r *Recorder) recording() bool {
+	return r.writer != nil
+}
+
+// record is used to record the given operation.
+func (r *Recorder) record(op operation) error {
+	if !r.recording() {
+		return errors.New("misconfigured recorder; not set to record")
+	}
+
+	_, err := r.writer.Write([]byte(op.String()))
+	return err
+}
+
+// step is used to iterate through the next operation found in the recording, if
 // any.
-func (r *Recorder) Next(f func(Operation) error) (found bool, err error) {
-	if r.Recording() {
+func (r *Recorder) step(f func(operation) error) (found bool, err error) {
+	if r.recording() {
 		return false, errors.New("misconfigured recorder; set to record, not replay")
 	}
 
@@ -220,12 +241,12 @@ func (r *Recorder) Next(f func(Operation) error) (found bool, err error) {
 	return true, nil
 }
 
-// parseOperation parses out the next Operation from the internal scanner. See
-// type-level comment on Operation to understand the grammar we're parsing
+// parseOperation parses out the next operation from the internal scanner. See
+// top-level comment on Recorder to understand the grammar we're parsing
 // against.
 func (r *Recorder) parseOperation() (parsed bool, err error) {
 	for r.scanner.Scan() {
-		r.op = Operation{}
+		r.op = operation{}
 		line := r.scanner.Text()
 
 		line = strings.TrimSpace(line)
@@ -250,7 +271,7 @@ func (r *Recorder) parseOperation() (parsed bool, err error) {
 			// Nothing to do here.
 			continue
 		}
-		r.op.Command = command
+		r.op.command = command
 
 		if err := r.parseSeparator(); err != nil {
 			return false, err
@@ -266,7 +287,7 @@ func (r *Recorder) parseOperation() (parsed bool, err error) {
 }
 
 // parseCommand parses a <command> line and returns it if parsed correctly. See
-// type-level comment on Operation to understand the grammar we're parsing
+// top-level comment on Recorder to understand the grammar we're parsing
 // against.
 func (r *Recorder) parseCommand(line string) (cmd string, err error) {
 	line = strings.TrimSpace(line)
@@ -284,8 +305,8 @@ func (r *Recorder) parseCommand(line string) (cmd string, err error) {
 }
 
 // parseSeparator parses a separator ('----'), erroring out if it's not parsed
-// correctly. See type-level comment on Operation to understand the grammar
-// we're parsing against.
+// correctly. See top-level comment on Recorder to understand the grammar we're
+// parsing against.
 func (r *Recorder) parseSeparator() error {
 	if !r.scanner.Scan() {
 		return errors.New(fmt.Sprintf("%s: expected to find separator after command", r.scanner.pos()))
@@ -297,7 +318,7 @@ func (r *Recorder) parseSeparator() error {
 	return nil
 }
 
-// parseOutput parses an <output>. See type-level comment on Operation to
+// parseOutput parses an <output>. See top-level comment on Recorder to
 // understand the grammar we're parsing against.
 func (r *Recorder) parseOutput() error {
 	var buf bytes.Buffer
@@ -328,7 +349,7 @@ func (r *Recorder) parseOutput() error {
 
 			line = r.scanner.Text()
 		}
-		r.op.Output = buf.String()
+		r.op.output = buf.String()
 		return nil
 	}
 
@@ -370,7 +391,7 @@ func (r *Recorder) parseOutput() error {
 		}
 	}
 
-	r.op.Output = buf.String()
+	r.op.output = buf.String()
 	return nil
 }
 
@@ -379,6 +400,3 @@ func (r *Recorder) parseOutput() error {
 // with existing ones, but it could be useful. It would allow test authors to
 // trim down auto-generated mocks by hand for readability, and ensure that
 // re-writes don't simply undo the work.
-//
-// TODO(irfansharif): If we could model errors, that'd be useful. Same thing for
-// top-level test.

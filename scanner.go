@@ -23,9 +23,9 @@ import (
 	"io"
 )
 
-// scanner is a convenience wrapper around a bufio.Scanner, and keeps track of
-// the currently read line number. It's also configured with an associated name
-// for the reader (typically a file name) to generate positional error messages.
+// scanner is a convenience wrapper around a bufio.Scanner that keeps track of
+// the last read line number. It's also configured with an associated name for
+// the reader (typically a file name) to generate positional error messages.
 type scanner struct {
 	*bufio.Scanner
 	line int
