@@ -102,24 +102,52 @@ The printed form of an operation (the base unit of what can be recorded) is
 defined by the following grammar. This is what's used when generating/reading
 from recording files.
 
-    # comment
-    <command> \
-    <that wraps over onto the next line>
-    ----
-    <output>
+```
+# comment
+<command> \
+<that wraps over onto the next line>
+----
+<output>
+```
 
 By default `<output>` cannot contain blank lines. This alternative syntax
 allows for it:
 
-    <command>
-    ----
-    ----
-    <output>
+```
+<command>
+----
+----
+<output>
 
-    <more output>
-    ----
-    ----
+<more output>
+----
+----
+```
 
 Callers are free to use `<output>` to model external errors as well; it's all
 opaque to Recorders. The syntax was borrowed from
 [cockroachdb/datadriven](https://github.com/cockroachdb/datadriven).
+
+## Contributing
+
+To run fuzz tests:
+
+```sh
+# Get the pre-requisite binaries.
+$ go get -u github.com/dvyukov/go-fuzz/go-fuzz \
+  github.com/dvyukov/go-fuzz/go-fuzz-build
+
+# Build the test program.
+$ go-fuzz-build
+
+# Run the fuzzer.
+$ go-fuzz
+2021/03/12 11:51:30 workers: 16, corpus: 2 (3s ago), crashers: 0, restarts: 1/0, execs: 0 (0/sec), cover: 0, uptime: 3s
+2021/03/12 11:51:33 workers: 16, corpus: 96 (0s ago), crashers: 0, restarts: 1/0, execs: 0 (0/sec), cover: 279, uptime: 6s
+2021/03/12 11:51:36 workers: 16, corpus: 110 (0s ago), crashers: 0, restarts: 1/64, execs: 7899 (878/sec), cover: 522, uptime: 9s
+...
+
+# Clean out fuzz-generated data.
+$ git clean -fdx
+```
+

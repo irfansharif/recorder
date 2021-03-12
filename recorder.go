@@ -375,12 +375,13 @@ func (r *Recorder) parseOutput() error {
 			if r.scanner.Scan() && r.scanner.Text() != "" {
 				return errors.New(fmt.Sprintf("%s: non-blank line after end of double ---- separator section", r.scanner.pos()))
 			}
-			break
+			r.op.output = buf.String()
+			return nil
 		}
 
 		// The separator we saw was part of the command output.
 		// Let's collect both lines (the first separator, and the
-		// new one).
+		// new one), and continue.
 		if _, err := fmt.Fprintln(&buf, line); err != nil {
 			return err
 		}
@@ -391,8 +392,8 @@ func (r *Recorder) parseOutput() error {
 		}
 	}
 
-	r.op.output = buf.String()
-	return nil
+	// We reached the end of the file before finding the closing separator.
+	return errors.New(fmt.Sprintf("%s: missing closing double ---- separators", r.scanner.pos()))
 }
 
 // TODO(irfansharif): We could introduce a `# keep` directive to pin recordings
