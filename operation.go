@@ -40,11 +40,13 @@ func (o *operation) String() string {
 	sb.WriteString("\n")
 
 	var emptyLine bool
-	lines := strings.Split(strings.TrimRight(o.output, "\n"), "\n")
-	for _, line := range lines {
-		if line == "" {
-			emptyLine = true
-			break
+	if o.output != "" {
+		lines := strings.Split(strings.TrimRight(o.output, "\n"), "\n")
+		for _, line := range lines {
+			if line == "" {
+				emptyLine = true
+				break
+			}
 		}
 	}
 	if emptyLine {

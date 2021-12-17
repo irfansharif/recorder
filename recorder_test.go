@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestRecorder(t *testing.T) {
@@ -28,38 +30,24 @@ output
 `
 	reader := New(WithReplay(bytes.NewReader([]byte(data)), "fuzz"))
 	var output, command string
-	found, err := reader.step(func(op operation) error {
+	found, err := reader.step(func(op operation) {
 		command = op.command
 		output = op.output
-		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !found {
-		t.Fatal("expected to find operation")
-	}
-	if command != "command" {
-		t.Fatalf("expected %q, got %q", "command", command)
-	}
-	if output != "output\n" {
-		t.Fatalf("expected %q, got %q", "output", output)
-	}
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "command", command)
+	require.Equal(t, "output\n", output)
 
 	buffer := bytes.NewBuffer(nil)
-	writer := New(WithRecording(buffer))
-	_, err = writer.Next(command, func() (string, error) {
+	recorder := New(WithRecording(buffer))
+	_, err = recorder.Next(command, func() (string, error) {
 		return output, nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	before, after := strings.TrimSpace(data), strings.TrimSpace(buffer.String())
-	if before != after {
-		t.Fatalf("mismatched buffers %q and %q", before, after)
-	}
+	require.Equal(t, before, after)
 }
 
 func TestRecorderMultiple(t *testing.T) {
@@ -84,46 +72,31 @@ output
 	for {
 		// Parse out the next operation.
 		var output, command string
-		found, err := reader.step(func(op operation) error {
+		found, err := reader.step(func(op operation) {
 			command, output = op.command, op.output
-			return nil
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		if !found {
-			// We're at the end of the file.
-			break
+			break // we're at the end of the file
 		}
 		parsedOps += 1
 
 		// Write out the next operation, just to see that it goes through.
 		buffer := bytes.NewBuffer(nil)
 		writer := New(WithRecording(buffer))
-		if err := writer.record(operation{command, output}); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, writer.record(operation{command, output}))
 
 		// Re-read what we just wrote out, just to see we're able to round trip
 		// through the recorder.
 		reader2 := New(WithReplay(buffer, "fuzz"))
-		_, err = reader2.step(func(op operation) error {
-			if op.command != command {
-				t.Fatalf("mismatched command: expected %q, got %q", command, op.command)
-			}
-			if op.output != output {
-				t.Fatalf("mismatched output: expected %q, got %q", output, op.output)
-			}
-			return nil
+		_, err = reader2.step(func(op operation) {
+			require.Equal(t, op.command, command)
+			require.Equal(t, op.output, output)
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 	}
 
-	if parsedOps != expectedParsedOps {
-		t.Fatalf("expected to found %d operations, found %d", expectedParsedOps, parsedOps)
-	}
+	require.Equal(t, expectedParsedOps, parsedOps)
 }
 
 func TestRecorderMalformed(t *testing.T) {
@@ -138,12 +111,8 @@ func TestRecorderMalformed(t *testing.T) {
 `
 
 	reader := New(WithReplay(bytes.NewReader([]byte(data)), "fuzz"))
-	_, err := reader.step(func(op operation) error {
-		return nil
-	})
-	if err == nil {
-		t.Fatal("expected non-nil error over malformed data")
-	}
+	_, err := reader.step(func(op operation) {})
+	require.NotNil(t, err)
 }
 
 func TestRecorderParse(t *testing.T) {
@@ -164,34 +133,35 @@ f
 
 	var output, command string
 	reader := New(WithReplay(bytes.NewReader([]byte(data)), "fuzz"))
-	_, err := reader.step(func(op operation) error {
+	_, err := reader.step(func(op operation) {
 		command, output = op.command, op.output
-		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// Write out the next operation, just to see that it goes through.
 	buffer := bytes.NewBuffer(nil)
 	writer := New(WithRecording(buffer))
-	if err := writer.record(operation{command, output}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, writer.record(operation{command, output}))
 
 	// Re-read what we just wrote out, just to see we're able to round trip
 	// through the recorder.
 	reader2 := New(WithReplay(buffer, "fuzz"))
-	_, err = reader2.step(func(op operation) error {
-		if op.command != command {
-			t.Fatalf("mismatched command: expected %q, got %q", command, op.command)
-		}
-		if op.output != output {
-			t.Fatalf("mismatched output: expected %q, got %q", output, op.output)
-		}
-		return nil
+	_, err = reader2.step(func(op operation) {
+		require.Equal(t, op.command, command)
+		require.Equal(t, op.output, output)
 	})
-	if err != nil {
-		t.Fatal(err)
+	require.NoError(t, err)
+}
+
+func TestOperationString(t *testing.T) {
+	op := operation{
+		command: "test-cmd",
+		output:  "",
 	}
+	expected := `
+test-cmd
+----
+
+`
+	require.Equal(t, strings.TrimLeft(expected, "\n"), op.String())
 }

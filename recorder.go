@@ -18,11 +18,10 @@
 package recorder
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
-	"strings"
+	"log"
 )
 
 // Recorder can be used to record a set of operations (defined only by a
@@ -159,20 +158,25 @@ func WithRecording(to io.Writer) Option {
 
 // Next is used to step through the next operation in the recorder. It does one
 // of three things, depending on how the recorder is configured.
-//  (a) WithReplay replays the next command in the recording, as long as it's
-//  identical to the provided one
-//  (b) WithRecording records the given command and output (captured by the
-//  provided callback)
-//  (c) If the recorder is nil (i.e. it's simply not configured), it will
-//  transparently execute the callback
+//  a. If the recorder is nil (i.e. it's simply not configured), it will
+//     transparently execute the callback;
+//  b. WithRecording records the given command and output (captured by the
+//     provided callback);
+//  c. WithReplay replays the next command in the recording, as long as it's
+//     identical to the provided one.
+//
+// TODO(irfansharif): We could pass a boolean to the given callback to let
+// callers distinguish between (a) and (b), helping avoid the overhead of
+// pretty-printing + parsing when run outside the context of tests.
 func (r *Recorder) Next(command string, f func() (output string, err error)) (string, error) {
 	if r == nil {
-		// Do the real thing; we're not recording or replaying.
+		// (a) Do the real thing; we're not recording or replaying.
 		output, err := f()
 		return output, err
 	}
 
 	if r.recording() {
+		// (b) We're recording, labeling with the given command name.
 		output, err := f()
 		if err != nil {
 			return "", err
@@ -180,31 +184,35 @@ func (r *Recorder) Next(command string, f func() (output string, err error)) (st
 
 		op := operation{command, output}
 		if err := r.record(op); err != nil {
-			return "", err
+			log.Fatalf("%v", err)
 		}
 		return output, nil
 	}
 
+	// (c) We're replaying from the next command in the recording.
 	var output string
-	found, err := r.step(func(op operation) error {
+	found, err := r.step(func(op operation) {
 		if op.command != command {
-			return fmt.Errorf("%s: expected %q, got %q", r.scanner.pos(), op.command, command)
+			log.Fatalf("%s: expected: %q\ngot: %q\n\n"+
+				"do you need to regenerate the recording using -record?",
+				r.scanner.pos(), op.command, command)
 		}
 		output = op.output
-		return nil
 	})
 	if err != nil {
-		return "", err
+		log.Fatalf("%v", err)
 	}
 	if !found {
-		return "", fmt.Errorf("%s: recording for %q not found", r.scanner.pos(), command)
+		log.Fatalf("%s: recording for %q not found\n\n"+
+			"do you need to regenerate the recording using -record?",
+			r.scanner.pos(), command)
 	}
 
 	return output, nil
 }
 
-// recording returns whether or not the recorder is configured to record (as
-// opposed to being configured to replay from an existing recording).
+// recording returns whether the recorder is configured to record (as opposed to
+// being set to replay from an existing recording).
 func (r *Recorder) recording() bool {
 	return r.writer != nil
 }
@@ -212,192 +220,32 @@ func (r *Recorder) recording() bool {
 // record is used to record the given operation.
 func (r *Recorder) record(op operation) error {
 	if !r.recording() {
-		return errors.New("misconfigured recorder; not set to record")
+		return errors.New("misconfigured recorder: not set to record")
 	}
 
 	_, err := r.writer.Write([]byte(op.String()))
-	return err
+	if err != nil {
+		return fmt.Errorf("unable to write recording for %q: %v", op.command, err)
+	}
+	return nil
 }
 
 // step is used to iterate through the next operation found in the recording, if
 // any.
-func (r *Recorder) step(f func(operation) error) (found bool, err error) {
+func (r *Recorder) step(f func(operation)) (found bool, err error) {
 	if r.recording() {
 		return false, errors.New("misconfigured recorder; set to record, not replay")
 	}
 
 	parsed, err := r.parseOperation()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("%s: unable to parse recording file: %v", r.scanner.name, err)
 	}
 
 	if !parsed {
 		return false, nil
 	}
 
-	if err := f(r.op); err != nil {
-		return false, fmt.Errorf("%s: %w", r.scanner.pos(), err)
-	}
+	f(r.op)
 	return true, nil
 }
-
-// parseOperation parses out the next operation from the internal scanner. See
-// top-level comment on Recorder to understand the grammar we're parsing
-// against.
-func (r *Recorder) parseOperation() (parsed bool, err error) {
-	for r.scanner.Scan() {
-		r.op = operation{}
-		line := r.scanner.Text()
-
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") {
-			// Skip comment lines.
-			continue
-		}
-
-		// Support wrapping command directive lines using "\".
-		for strings.HasSuffix(line, `\`) && r.scanner.Scan() {
-			nextLine := r.scanner.Text()
-			line = strings.TrimSuffix(line, `\`)
-			line = strings.TrimSpace(line)
-			line = fmt.Sprintf("%s %s", line, strings.TrimSpace(nextLine))
-		}
-
-		command, err := r.parseCommand(line)
-		if err != nil {
-			return false, err
-		}
-		if command == "" {
-			// Nothing to do here.
-			continue
-		}
-		r.op.command = command
-
-		if err := r.parseSeparator(); err != nil {
-			return false, err
-		}
-
-		if err := r.parseOutput(); err != nil {
-			return false, err
-		}
-
-		return true, nil
-	}
-	return false, nil
-}
-
-// parseCommand parses a <command> line and returns it if parsed correctly. See
-// top-level comment on Recorder to understand the grammar we're parsing
-// against.
-func (r *Recorder) parseCommand(line string) (cmd string, err error) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return "", nil
-	}
-
-	origLine := line
-	cmd = strings.TrimSpace(line)
-	if cmd == "" {
-		column := len(origLine) - len(line) + 1
-		return "", errors.New(fmt.Sprintf("%s: cannot parse command at col %d: %s", r.scanner.pos(), column, origLine))
-	}
-	return cmd, nil
-}
-
-// parseSeparator parses a separator ('----'), erroring out if it's not parsed
-// correctly. See top-level comment on Recorder to understand the grammar we're
-// parsing against.
-func (r *Recorder) parseSeparator() error {
-	if !r.scanner.Scan() {
-		return errors.New(fmt.Sprintf("%s: expected to find separator after command", r.scanner.pos()))
-	}
-	line := r.scanner.Text()
-	if line != "----" {
-		return errors.New(fmt.Sprintf("%s: expected to find separator after command, found %q instead", r.scanner.pos(), line))
-	}
-	return nil
-}
-
-// parseOutput parses an <output>. See top-level comment on Recorder to
-// understand the grammar we're parsing against.
-func (r *Recorder) parseOutput() error {
-	var buf bytes.Buffer
-	var line string
-
-	var allowBlankLines bool
-	if r.scanner.Scan() {
-		line = r.scanner.Text()
-		if line == "----" {
-			allowBlankLines = true
-		}
-	}
-
-	if !allowBlankLines {
-		// Terminate on first blank line.
-		for {
-			if strings.TrimSpace(line) == "" {
-				break
-			}
-
-			if _, err := fmt.Fprintln(&buf, line); err != nil {
-				return err
-			}
-
-			if !r.scanner.Scan() {
-				break
-			}
-
-			line = r.scanner.Text()
-		}
-		r.op.output = buf.String()
-		return nil
-	}
-
-	// Look for two successive lines of "----" before terminating.
-	for r.scanner.Scan() {
-		line = r.scanner.Text()
-		if line != "----" {
-			// We just picked up a regular line that's part of the command
-			// output.
-			if _, err := fmt.Fprintln(&buf, line); err != nil {
-				return err
-			}
-
-			continue
-		}
-
-		// We picked up a separator. We could either be part of the
-		// command output, or it was actually intended by the user as a
-		// separator. Let's check to see if we can parse a second one.
-		if err := r.parseSeparator(); err == nil {
-			// We just saw the second separator, the output portion is done.
-			// Read the following blank line.
-			if r.scanner.Scan() && r.scanner.Text() != "" {
-				return errors.New(fmt.Sprintf("%s: non-blank line after end of double ---- separator section", r.scanner.pos()))
-			}
-			r.op.output = buf.String()
-			return nil
-		}
-
-		// The separator we saw was part of the command output.
-		// Let's collect both lines (the first separator, and the
-		// new one), and continue.
-		if _, err := fmt.Fprintln(&buf, line); err != nil {
-			return err
-		}
-
-		line2 := r.scanner.Text()
-		if _, err := fmt.Fprintln(&buf, line2); err != nil {
-			return err
-		}
-	}
-
-	// We reached the end of the file before finding the closing separator.
-	return errors.New(fmt.Sprintf("%s: missing closing double ---- separators", r.scanner.pos()))
-}
-
-// TODO(irfansharif): We could introduce a `# keep` directive to pin recordings
-// on re-write. It raises a few questions around how new recordings get merged
-// with existing ones, but it could be useful. It would allow test authors to
-// trim down auto-generated mocks by hand for readability, and ensure that
-// re-writes don't simply undo the work.

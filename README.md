@@ -21,20 +21,19 @@ It also intercepts all OS operations (`os.{Mkdir,Remove,Symlink}`). (Also see
 
 ---
 
-Users will typically want to embed a recorder into structs that oversee the
-sort of side-effect or I/O they'd like to capture and later playback from
-(as opposed to "doing the real thing" in tests). These side-effects can be
+Users will typically want to embed a recorder into structs (think drivers) that
+oversee the sort of side-effect or I/O they'd like to capture and later playback
+from (as opposed to "doing the real thing" in tests). These side-effects can be
 arbitrary. If we're building a CLI that calls into the filesystem to filter for
-a set of files and writes out their contents to a zip file, the I/O could be
-the listing out for files, and the side-effects would include creating the zip
-file.
+a set of files and writes out their contents to a zip file, the I/O could be the
+listing out for files, and the side-effects would include creating the zip file.
 
 I/O could also be calling into anything that sits outside some package
-boundary. The recorder, if embedded into the package, let's us:
+boundary. The recorder, if embedded into the package, lets us:
 - Record the set of outbound calls, and the relevant responses, while
-"doing the real thing"
+  "doing the real thing"
 - Play back from an earlier recording, intercepting all outbound calls and
-effectively mocking out all dependencies the component has
+  effectively mocking out all dependencies the component has
 
 ### Example
 
@@ -48,11 +47,10 @@ type globber struct {
 
 // glob returns the names of all files matching the given pattern.
 func (g *globber) glob(pattern string) []string {
-	output, _ := g.Next(pattern, func() (string, error) {
+	capture, _ := g.Next(pattern, func() (string, error) {
 		matches, _ := filepath.Glob(pattern) // do the real thing
-
-		output := fmt.Sprintf("%s\n", strings.Join(matches, "\n"))
-		return output, nil
+		capture := fmt.Sprintf("%s\n", strings.Join(matches, "\n"))
+		return capture, nil
 	})
 
 	matches := strings.Split(strings.TrimSpace(output), "\n")
@@ -60,13 +58,13 @@ func (g *globber) glob(pattern string) []string {
 }
 ```
 
-All we had to do was define tiny bi-directional parsers to convert our input
-and output to the human-readable string form Recorders understand. Strung
-together. we can build tests that would plumb in Recorders with the right mode
-and play back from them when asked for. See
+All we had to do was define tiny bi-directional parsers to convert our input and
+output to the human-readable string form Recorders understand. Strung together.
+we can build tests that would plumb in Recorders with the right mode and play
+back from them when asked for. See
 [example/](https://github.com/irfansharif/recorder/tree/main/example) for this
-test pattern, where it behaves differently depending on whether or not
-`-record` is specified.
+test pattern, where it behaves differently depending on whether `-record` is
+specified.
 
 ```sh
 $ go test -run TestExample -record
@@ -95,6 +93,22 @@ that generate copious amounts of output (like fetching from some API). It
 suffices for us to trim the recording down by hand, and make sure we don't
 re-record over it (by inspecting the diffs during review). Recordings, like
 regular mocks, are expected to get checked in as fixtures.
+
+### Usage pseudo-code
+
+```go
+func (d *driver) f(input interface{}) (interface{}, error) {
+    command := // ... string representation of input
+    capture, _ := d.Next(command, func() (string, error) {
+        output, _ := // ... do the real thing f was supposed to
+        capture := // ... string representation of output
+        return capture, nil
+    })
+
+    output := // ... reconstruct output from its string representation
+    return output, nil
+}
+```
 
 ## Grammar
 

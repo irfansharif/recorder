@@ -12,6 +12,7 @@
 // implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
+//go:build gofuzz
 // +build gofuzz
 
 package recorder
@@ -27,9 +28,8 @@ func Fuzz(data []byte) int {
 	for {
 		// Parse out the next operation.
 		var output, command string
-		found, err := reader.step(func(op operation) error {
+		found, err := reader.step(func(op operation) {
 			command, output = op.command, op.output
-			return nil
 		})
 		if err != nil {
 			if output != "" || command != "" || found {
@@ -58,14 +58,13 @@ func Fuzz(data []byte) int {
 		// Re-read what we just wrote out, just to see we're able to round trip
 		// through the recorder.
 		reader2 := New(WithReplay(buffer, "fuzz"))
-		_, err = reader2.step(func(op operation) error {
+		_, err = reader2.step(func(op operation) {
 			if op.command != command {
 				panic(fmt.Sprintf("mismatched command: expected %q, got %q", command, op.command))
 			}
 			if op.output != output {
 				panic(fmt.Sprintf("mismatched output: expected %q, got %q", output, op.output))
 			}
-			return nil
 		})
 		if err != nil {
 			panic(err)
